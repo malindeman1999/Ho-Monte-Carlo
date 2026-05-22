@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GUI and Checkpoints</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>GUI and Checkpoints</h1>
+  <p><a href="index.html">Back to index</a></p>
+
+  <h2>Controls</h2>
+  <ul>
+    <li><strong>New</strong> builds a fresh run from the current fields.</li>
+    <li><strong>True m_nu</strong> sets the injected neutrino mass in meV. The default is 75 meV.</li>
+    <li><strong>Start</strong> accumulates chunks until paused or target years are reached.</li>
+    <li><strong>Pause</strong> stops after the current chunk.</li>
+    <li><strong>Save</strong> writes the current checkpoint.</li>
+    <li><strong>Load</strong> resumes from a saved JSON checkpoint.</li>
+  </ul>
+
+  <h2>Checkpoint Files</h2>
+  <p>
+    Each run writes two files under <code>runs/</code>. The JSON file stores
+    inputs, exposure, sensitivity history, and RNG state. The NPZ file stores
+    accumulated counts and bin edges.
+  </p>
+
+  <h2>GPU Switch</h2>
+  <p>
+    The checkbox requests GPU acceleration. The current machine has an NVIDIA
+    RTX A4000 visible to the driver, but the installed PyTorch package is
+    CPU-only. Therefore the simulator reports a CPU fallback. To activate CUDA,
+    install a CUDA-enabled PyTorch build matching the local driver, then restart
+    the GUI.
+  </p>
+
+  <h2>Displayed Estimates</h2>
+  <p>
+    The live <strong>Fit m_nu^2</strong> is a signed linearized Poisson fit to
+    the accumulated histogram with nuisance directions for normalization, flat
+    background, and pileup scale. Because statistical fluctuations can drive
+    <code>m_nu^2</code> negative, the GUI also shows <strong>Physical m_nu</strong>,
+    which is clipped to zero before taking the square root. The plot displays a
+    signed square-root scale for the fitted <code>m_nu^2</code> so negative
+    excursions remain visible instead of flattening at zero.
+  </p>
+
+  <h2>Plots</h2>
+  <p>
+    The upper plot shows the full model spectrum from <code>0</code> to
+    <code>2Q + 50 eV</code>, which is the grid used for the pileup
+    self-convolution. It overlays the single-event Ho spectrum, the measured
+    mixed spectrum, and the unresolved-pileup contribution scaled by
+    <code>f_pp</code>. The shaded band marks the endpoint window used for the
+    accumulated-count histogram and fit.
+  </p>
+  <p>
+    The middle plot shows accumulated Poisson counts only inside the selected
+    endpoint fit/display window. The simulator does not currently save a
+    full-spectrum count histogram; the full-spectrum panel is the current model
+    density used to construct the endpoint probabilities.
+  </p>
+</main>
+</body>
+</html>

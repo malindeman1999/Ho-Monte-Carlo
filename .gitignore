@@ -1,0 +1,4 @@
+runs/
+__pycache__/
+*.pyc
+ho163_kid_sensitivity/__pycache__/

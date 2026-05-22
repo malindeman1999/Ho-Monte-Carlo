@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Validation and Caveats</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Validation and Caveats</h1>
+  <p><a href="index.html">Back to index</a></p>
+
+  <h2>Checks Already Built In</h2>
+  <ul>
+    <li>Spectra are normalized after generation and after each convolution.</li>
+    <li>The endpoint is cut off at <code>E &gt; Q</code> for zero or positive mass.</li>
+    <li>Pileup uses zero-padded convolution through SciPy, avoiding circular wraparound.</li>
+    <li>Progress can be saved and reloaded without changing accumulated counts.</li>
+  </ul>
+
+  <h2>Recommended Next Checks</h2>
+  <ul>
+    <li>Scan live time and confirm approximate <code>m_nu proportional t^-1/4</code> behavior.</li>
+    <li>Compare 1.0 eV HOLMES-like and 0.2 eV KID-like resolution inputs.</li>
+    <li>Scan <code>activity_bq</code> and <code>tau_eff_us</code> to see when pileup dominates.</li>
+    <li>Add a slower maximum-likelihood pseudo-experiment fitter for comparison.</li>
+  </ul>
+
+  <h2>Caveats</h2>
+  <p>
+    This is a trade-study simulator. The atomic line model is simplified and
+    omits shake-up, shake-off, exchange, overlap corrections, gain drift,
+    nonlinearity, and per-pixel calibration effects. Final sensitivity claims
+    need a more complete nuisance-parameter fit and validation against published
+    HOLMES/Nucciotti calculations.
+  </p>
+</main>
+</body>
+</html>

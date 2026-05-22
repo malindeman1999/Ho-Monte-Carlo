@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Physics Model</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Physics Model</h1>
+  <p><a href="index.html">Back to index</a></p>
+
+  <h2>Single-Event Spectrum</h2>
+  <p>
+    The detector measures calorimetric energy <code>E_c</code>. The simplified
+    spectrum is
+  </p>
+  <pre><code>S(E_c) = phase_space(E_c, Q, mnu2) * sum_i P_i L(E_c; E_i, Gamma_i)</code></pre>
+  <p>
+    The phase-space factor is
+    <code>(Q - E_c) sqrt((Q - E_c)^2 - mnu2)</code>, clipped to zero above the
+    physical endpoint. Negative <code>mnu2</code> is allowed only internally for
+    stable finite-difference derivatives.
+  </p>
+
+  <h2>Detector Response</h2>
+  <p>
+    Energy resolution is a Gaussian convolution with
+    <code>sigma = FWHM / 2.355</code>. The convolution is normalized after
+    smoothing to avoid numerical drift.
+  </p>
+
+  <h2>Pileup</h2>
+  <p>
+    The unresolved pileup density is the self-convolution of the single-event
+    spectrum. Its fraction is
+  </p>
+  <pre><code>f_pp = activity_bq_per_pixel * tau_eff_seconds</code></pre>
+  <p>
+    Activity is per detector pixel, not the full array rate. The GUI reports
+    the resulting <code>f_pp</code> for the current inputs.
+  </p>
+
+  <h2>Counts</h2>
+  <p>
+    The simulator does not draw individual Ho decays. For each chunk, it
+    computes binned expected counts and draws one Poisson value per bin. The
+    fit-window bins keep their absolute probability, so only the fraction of
+    events landing in the selected energy range contributes to the histogram.
+    This is the right scale for exposures with 10^14 to 10^15 physical events.
+  </p>
+
+  <h2>Fisher Estimate</h2>
+  <p>
+    The displayed sensitivity is a compact Fisher estimate. The floated
+    directions are <code>mnu2</code>, normalization, flat background, and
+    unresolved pileup scale. The Q-value is fixed in the GUI estimator because
+    a robust Q-floating fit is more expensive and should be added after this
+    first trade-study tool is validated.
+  </p>
+</main>
+</body>
+</html>

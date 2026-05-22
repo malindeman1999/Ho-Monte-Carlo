@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ho-163 KID/TKID Simulator Wiki</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Ho-163 KID/TKID Simulator Wiki</h1>
+  <p>This wiki documents the local simulator in <code>ho163_kid_sensitivity/</code>.</p>
+  <nav>
+    <a href="model.html">Physics Model</a>
+    <a href="gui.html">GUI and Checkpoints</a>
+    <a href="validation.html">Validation and Caveats</a>
+  </nav>
+
+  <h2>Quick Start</h2>
+  <pre><code>python run_gui.py</code></pre>
+  <p>
+    The first screen is the simulator. Set detector count, per-pixel activity,
+    energy resolution, resolving time, target exposure, and chunk size. Press
+    <strong>Start</strong> to accumulate binned Poisson counts. Progress is
+    saved after each completed chunk in <code>runs/</code>.
+  </p>
+
+  <h2>Implemented Deliverables</h2>
+  <ul>
+    <li>Ho-163 calorimetric spectrum with a simplified Lorentzian shell model.</li>
+    <li>Gaussian detector response using the requested FWHM.</li>
+    <li>Unresolved pileup as a self-convolution with <code>f_pp = A tau_eff</code>.</li>
+    <li>Live histogram of accumulated counts in the endpoint-region fit window.</li>
+    <li>Fisher-matrix estimate of the 90% neutrino-mass sensitivity.</li>
+    <li>Checkpoint and resume using JSON metadata and compressed NumPy arrays.</li>
+    <li>Optional GPU switch with honest CPU fallback when CUDA Python support is absent.</li>
+  </ul>
+
+  <h2>Corrected Planning Point</h2>
+  <p>
+    The Holmes notes sometimes describe 0.2 eV FWHM as a 10x improvement over
+    a 1 eV HOLMES benchmark. That is a 5x improvement. The simulator uses the
+    direct input values and therefore applies the corrected scaling.
+  </p>
+</main>
+</body>
+</html>
