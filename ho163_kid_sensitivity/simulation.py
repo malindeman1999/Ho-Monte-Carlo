@@ -33,7 +33,13 @@ def simulate_chunk(state: RunState, rng: np.random.Generator) -> dict:
     state.counts += draw
     state.live_time_years += years
     fisher = fisher_mnu_sensitivity(state.config, max(state.live_time_years, years))
-    estimate = estimate_mnu_from_counts(state.counts, state.config, state.live_time_years)
+    estimate = estimate_mnu_from_counts(
+        state.counts,
+        state.config,
+        state.live_time_years,
+        fit_method=state.config.fit_method,
+        endpoint_weight=state.config.endpoint_weight,
+    )
     entry = {
         "live_time_years": state.live_time_years,
         "total_counts": float(state.counts.sum()),

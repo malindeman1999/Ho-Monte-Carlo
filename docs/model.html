@@ -39,7 +39,10 @@
   <pre><code>f_pp = activity_bq_per_pixel * tau_eff_seconds</code></pre>
   <p>
     Activity is per detector pixel, not the full array rate. The GUI reports
-    the resulting <code>f_pp</code> for the current inputs.
+    the resulting <code>f_pp</code> for the current inputs. It plots the
+    normalized self-convolution as <strong>Normalized pileup curve</strong> and
+    the accepted contribution <code>f_pp * pileup_density</code> as
+    <strong>Pileup passing filter</strong>.
   </p>
 
   <h2>Counts</h2>

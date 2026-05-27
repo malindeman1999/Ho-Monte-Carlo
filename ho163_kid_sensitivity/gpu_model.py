@@ -91,6 +91,7 @@ def build_model_gpu(config: SimulationConfig, mnu2_ev2: float | None = None) -> 
         "energy_ev": to_numpy(energy),
         "single_density": to_numpy(single),
         "pileup_density": to_numpy(pp_on_grid),
+        "passing_pileup_density": f_pp * to_numpy(pp_on_grid),
         "measured_density": to_numpy(measured),
         "bin_edges_ev": edges_np,
         "bin_centers_ev": 0.5 * (edges_np[:-1] + edges_np[1:]),

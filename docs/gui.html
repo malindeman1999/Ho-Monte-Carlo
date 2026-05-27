@@ -14,6 +14,7 @@
   <h2>Controls</h2>
   <ul>
     <li><strong>New</strong> builds a fresh run from the current fields.</li>
+    <li><strong>Update spectra</strong> redraws spectra from edited fields. During an accumulated run it is a preview and does not change saved run parameters.</li>
     <li><strong>True m_nu</strong> sets the injected neutrino mass in meV. The default is 75 meV.</li>
     <li><strong>Start</strong> accumulates chunks until paused or target years are reached.</li>
     <li><strong>Pause</strong> stops after the current chunk.</li>
@@ -53,15 +54,19 @@
     The upper plot shows the full model spectrum from <code>0</code> to
     <code>2Q + 50 eV</code>, which is the grid used for the pileup
     self-convolution. It overlays the single-event Ho spectrum, the measured
-    mixed spectrum, and the unresolved-pileup contribution scaled by
-    <code>f_pp</code>. The shaded band marks the endpoint window used for the
-    accumulated-count histogram and fit.
+    mixed spectrum, the normalized pileup energy-shape curve, and the pileup
+    events that pass the timing filter, scaled by <code>f_pp</code>. The shaded
+    band marks the endpoint window used for the accumulated-count histogram and
+    fit.
   </p>
   <p>
     The middle plot shows accumulated Poisson counts only inside the selected
-    endpoint fit/display window. The simulator does not currently save a
-    full-spectrum count histogram; the full-spectrum panel is the current model
-    density used to construct the endpoint probabilities.
+    endpoint fit/display window. It overlays cumulative expected total,
+    single-Ho, and accepted-pileup counts for the active accumulated exposure
+    (or the first chunk before accumulation starts). The simulator does not
+    currently save a full-spectrum count
+    histogram; the full-spectrum panel is the current model density used to
+    construct the endpoint probabilities.
   </p>
 </main>
 </body>

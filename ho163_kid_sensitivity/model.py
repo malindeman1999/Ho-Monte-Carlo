@@ -55,6 +55,7 @@ def build_model(config: SimulationConfig, mnu2_ev2: float | None = None) -> dict
         "energy_ev": energy,
         "single_density": single,
         "pileup_density": pp_on_grid,
+        "passing_pileup_density": f_pp * pp_on_grid,
         "measured_density": measured,
         "bin_edges_ev": bin_edges,
         "bin_centers_ev": bin_centers,
