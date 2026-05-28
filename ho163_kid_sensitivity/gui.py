@@ -17,7 +17,7 @@ if __package__ in {None, ""}:
     from ho163_kid_sensitivity.backend import backend_label, gpu_status
     from ho163_kid_sensitivity.configs import SECONDS_PER_YEAR, SimulationConfig
     from ho163_kid_sensitivity.fisher import estimate_mnu_from_counts
-    from ho163_kid_sensitivity.model import expected_counts
+    from ho163_kid_sensitivity.model import expected_count_components, expected_counts
     from ho163_kid_sensitivity.response import bin_density_interpolated, gaussian_convolve_density
     from ho163_kid_sensitivity.simulation import compute_chunk_update, new_state, rng_from_state
     from ho163_kid_sensitivity.state import RunState, load_state, save_state
@@ -25,7 +25,7 @@ else:
     from .backend import backend_label, gpu_status
     from .configs import SECONDS_PER_YEAR, SimulationConfig
     from .fisher import estimate_mnu_from_counts
-    from .model import expected_counts
+    from .model import expected_count_components, expected_counts
     from .response import bin_density_interpolated, gaussian_convolve_density
     from .simulation import compute_chunk_update, new_state, rng_from_state
     from .state import RunState, load_state, save_state
@@ -717,13 +717,15 @@ class SimulatorApp(tk.Tk):
 
         fit_centers = centers
         fit_widths = widths
+        _, _, inferred_pileup, _ = expected_count_components(cfg, display_years)
+        fit_data = counts - inferred_pileup
         self.ax_fit.bar(
             fit_centers,
-            counts,
+            fit_data,
             width=fit_widths,
             color="#7393b3",
             alpha=0.65,
-            label="Fit bins (data)",
+            label="Diagnostic bins (data - inferred pileup)",
         )
         fit_estimate = estimate_mnu_from_counts(
             counts,
@@ -737,24 +739,36 @@ class SimulatorApp(tk.Tk):
         if np.isfinite(fit_mnu2):
             fit_mnu_label = f"{self._physical_mnu_mev(float(fit_mnu2)):+.3g} meV"
         fit_curve = np.asarray(fit_estimate.get("mu_fit", np.array([])), dtype=float)
+        diagnostic_fit_curve = fit_curve - inferred_pileup if fit_curve.size == counts.size else fit_curve
         if fit_curve.size == counts.size and np.any(np.isfinite(fit_curve)):
+            fit_params = fit_estimate.get("fit_params", {})
+            if (
+                fit_params.get("method") in {"robust_mle", "mle", "robust", "poisson_full"}
+                and np.isfinite(fit_params.get("mnu2_ev2", np.nan))
+                and np.isfinite(fit_params.get("norm", np.nan))
+            ):
+                _, _, fitted_pileup, _ = expected_count_components(
+                    cfg,
+                    display_years,
+                    mnu2_ev2=float(fit_params["mnu2_ev2"]),
+                )
+                diagnostic_fit_curve = fit_curve - float(fit_params["norm"]) * fitted_pileup
             self.ax_fit.plot(
                 fit_centers,
-                fit_curve,
+                diagnostic_fit_curve,
                 color="#1f5a24",
                 lw=1.0,
                 marker="o",
                 ms=2.5,
-                label=f"Best fit bins (full model, m_nu={fit_mnu_label})",
+                label=f"Best fit bins after pileup subtraction (m_nu={fit_mnu_label})",
             )
-            fit_params = fit_estimate.get("fit_params", {})
             if (
                 fit_params.get("method") in {"robust_mle", "mle", "robust", "poisson_full"}
                 and np.isfinite(fit_params.get("mnu2_ev2", np.nan))
                 and np.isfinite(fit_params.get("norm", np.nan))
                 and np.isfinite(fit_params.get("flat_bin", np.nan))
             ):
-                _, smooth_model = expected_counts(
+                _, _, _, smooth_model = expected_count_components(
                     cfg,
                     display_years,
                     mnu2_ev2=float(fit_params["mnu2_ev2"]),
@@ -762,7 +776,11 @@ class SimulatorApp(tk.Tk):
                 n_events = cfg.total_rate_hz * display_years * SECONDS_PER_YEAR
                 bin_w = float(np.mean(fit_widths)) if fit_widths.size else 1.0
                 smooth_counts = (
-                    float(fit_params["norm"]) * smooth_model["measured_density"] * n_events * bin_w
+                    float(fit_params["norm"])
+                    * (1.0 - smooth_model["pileup_fraction"])
+                    * smooth_model["single_measured_density"]
+                    * n_events
+                    * bin_w
                     + float(fit_params["flat_bin"])
                 )
                 x_smooth = smooth_model["energy_ev"]
@@ -776,7 +794,7 @@ class SimulatorApp(tk.Tk):
                     label="Smooth full-model fit",
                 )
         else:
-            fit_curve, _ = expected_counts(
+            _, fit_curve, _, _ = expected_count_components(
                 cfg,
                 max(cfg.chunk_days / 365.25, 1e-6),
                 mnu2_ev2=cfg.mnu2_ev2,
@@ -789,11 +807,16 @@ class SimulatorApp(tk.Tk):
                 ls=":",
                 label="Reference curve (no fit yet)",
             )
-        fit_positive = np.concatenate([counts, fit_curve])
-        fit_positive = fit_positive[np.isfinite(fit_positive) & (fit_positive > 0.0)]
-        if fit_positive.size:
-            self.ax_fit.set_ylim(0.0, max(1.0, 1.05 * float(fit_positive.max())))
-        self.ax_fit.set_ylabel("Counts/bin")
+            diagnostic_fit_curve = fit_curve
+        fit_values = np.concatenate([fit_data, diagnostic_fit_curve])
+        fit_values = fit_values[np.isfinite(fit_values)]
+        if fit_values.size:
+            lower = min(0.0, 1.05 * float(fit_values.min()))
+            upper = max(1.0, 1.05 * float(fit_values.max()))
+            self.ax_fit.set_ylim(lower, upper)
+        self.ax_fit.axhline(0.0, color="#888888", lw=0.8)
+        self.ax_fit.axvline(cfg.q_ec_ev, color="#555555", lw=0.9, ls=":", label="Q endpoint")
+        self.ax_fit.set_ylabel("Diagnostic counts/bin after pileup subtraction")
         self.ax_fit.set_xlabel("Measured energy (eV)")
         self.ax_fit.legend(loc="upper right")
         self.ax_fit.grid(True, alpha=0.2)

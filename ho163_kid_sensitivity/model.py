@@ -99,6 +99,8 @@ def _build_model_uncached(config: SimulationConfig, mnu2_ev2: float | None = Non
         bg_frac = min(0.5, bg_counts / max(n_ho_year, 1.0))
         mixed = (1.0 - bg_frac) * mixed + bg_frac * bg
 
+    single_measured = gaussian_convolve_density(energy, single, config.energy_fwhm_ev)
+    pileup_measured = gaussian_convolve_density(energy, pp_on_grid, config.energy_fwhm_ev)
     measured = gaussian_convolve_density(energy, normalize_density(energy, mixed), config.energy_fwhm_ev)
 
     low = max(0.0, q + config.fit_low_offset_ev)
@@ -106,16 +108,22 @@ def _build_model_uncached(config: SimulationConfig, mnu2_ev2: float | None = Non
     bin_edges = np.linspace(low, high, config.n_bins + 1)
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
     bin_probs = bin_density_interpolated(energy, measured, bin_edges)
+    single_bin_probs = (1.0 - f_pp) * bin_density_interpolated(energy, single_measured, bin_edges)
+    pileup_bin_probs = f_pp * bin_density_interpolated(energy, pileup_measured, bin_edges)
 
     return {
         "energy_ev": energy,
         "single_density": single,
         "pileup_density": pp_on_grid,
+        "single_measured_density": single_measured,
+        "pileup_measured_density": pileup_measured,
         "passing_pileup_density": f_pp * pp_on_grid,
         "measured_density": measured,
         "bin_edges_ev": bin_edges,
         "bin_centers_ev": bin_centers,
         "bin_probabilities": bin_probs,
+        "single_bin_probabilities": single_bin_probs,
+        "pileup_bin_probabilities": pileup_bin_probs,
         "pileup_fraction": f_pp,
     }
 
@@ -124,3 +132,14 @@ def expected_counts(config: SimulationConfig, live_time_years: float, mnu2_ev2: 
     model = build_model(config, mnu2_ev2=mnu2_ev2)
     n_events = config.total_rate_hz * live_time_years * SECONDS_PER_YEAR
     return model["bin_probabilities"] * n_events, model
+
+
+def expected_count_components(
+    config: SimulationConfig, live_time_years: float, mnu2_ev2: float | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    model = build_model(config, mnu2_ev2=mnu2_ev2)
+    n_events = config.total_rate_hz * live_time_years * SECONDS_PER_YEAR
+    total = model["bin_probabilities"] * n_events
+    single = model["single_bin_probabilities"] * n_events
+    pileup = model["pileup_bin_probabilities"] * n_events
+    return total, single, pileup, model
