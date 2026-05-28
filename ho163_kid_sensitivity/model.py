@@ -1,14 +1,70 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+import threading
+
 import numpy as np
 
 from .configs import SECONDS_PER_YEAR, SimulationConfig
 from .backend import gpu_status
-from .response import bin_density, gaussian_convolve_density, pileup_density
+from .response import bin_density_interpolated, gaussian_convolve_density, pileup_density
 from .spectra import ho163_spectrum, make_energy_grid, normalize_density
 
 
+_MODEL_CACHE_MAX = 16
+_MODEL_CACHE: OrderedDict[tuple, dict] = OrderedDict()
+_MODEL_CACHE_LOCK = threading.RLock()
+
+
+def _atomic_lines_key(lines: list[dict]) -> tuple:
+    return tuple(
+        (
+            str(line["label"]),
+            float(line["energy_ev"]),
+            float(line["width_ev"]),
+            float(line["strength"]),
+        )
+        for line in lines
+    )
+
+
+def _model_cache_key(config: SimulationConfig, mnu2_ev2: float | None) -> tuple:
+    return (
+        float(config.q_ec_ev),
+        float(config.mnu2_ev2 if mnu2_ev2 is None else mnu2_ev2),
+        float(config.energy_fwhm_ev),
+        int(config.n_detectors),
+        float(config.activity_bq),
+        float(config.tau_eff_us),
+        float(config.background_per_ev_year),
+        int(config.n_grid),
+        int(config.n_bins),
+        bool(config.use_gpu),
+        float(config.fit_low_offset_ev),
+        float(config.fit_high_offset_ev),
+        _atomic_lines_key(config.atomic_lines),
+    )
+
+
 def build_model(config: SimulationConfig, mnu2_ev2: float | None = None) -> dict:
+    cache_key = _model_cache_key(config, mnu2_ev2)
+    with _MODEL_CACHE_LOCK:
+        cached = _MODEL_CACHE.get(cache_key)
+        if cached is not None:
+            _MODEL_CACHE.move_to_end(cache_key)
+            return cached
+
+    model = _build_model_uncached(config, mnu2_ev2=mnu2_ev2)
+
+    with _MODEL_CACHE_LOCK:
+        _MODEL_CACHE[cache_key] = model
+        _MODEL_CACHE.move_to_end(cache_key)
+        while len(_MODEL_CACHE) > _MODEL_CACHE_MAX:
+            _MODEL_CACHE.popitem(last=False)
+    return model
+
+
+def _build_model_uncached(config: SimulationConfig, mnu2_ev2: float | None = None) -> dict:
     if config.use_gpu:
         status = gpu_status()
         # This installation currently has CPU-only PyTorch. The branch is kept
@@ -49,7 +105,7 @@ def build_model(config: SimulationConfig, mnu2_ev2: float | None = None) -> dict
     high = min(energy[-1], q + config.fit_high_offset_ev)
     bin_edges = np.linspace(low, high, config.n_bins + 1)
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-    bin_probs = bin_density(energy, measured, bin_edges)
+    bin_probs = bin_density_interpolated(energy, measured, bin_edges)
 
     return {
         "energy_ev": energy,

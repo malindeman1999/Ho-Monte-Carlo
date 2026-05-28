@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -9,15 +11,24 @@ from tkinter import filedialog, messagebox, ttk
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-from scipy.optimize import curve_fit
 
-from .backend import backend_label, gpu_status
-from .configs import SECONDS_PER_YEAR, SimulationConfig
-from .fisher import estimate_mnu_from_counts, fisher_mnu_sensitivity
-from .model import expected_counts
-from .response import bin_density, gaussian_convolve_density
-from .simulation import new_state, rng_from_state, simulate_chunk
-from .state import RunState, load_state, save_state
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from ho163_kid_sensitivity.backend import backend_label, gpu_status
+    from ho163_kid_sensitivity.configs import SECONDS_PER_YEAR, SimulationConfig
+    from ho163_kid_sensitivity.fisher import estimate_mnu_from_counts
+    from ho163_kid_sensitivity.model import expected_counts
+    from ho163_kid_sensitivity.response import bin_density_interpolated, gaussian_convolve_density
+    from ho163_kid_sensitivity.simulation import compute_chunk_update, new_state, rng_from_state
+    from ho163_kid_sensitivity.state import RunState, load_state, save_state
+else:
+    from .backend import backend_label, gpu_status
+    from .configs import SECONDS_PER_YEAR, SimulationConfig
+    from .fisher import estimate_mnu_from_counts
+    from .model import expected_counts
+    from .response import bin_density_interpolated, gaussian_convolve_density
+    from .simulation import compute_chunk_update, new_state, rng_from_state
+    from .state import RunState, load_state, save_state
 
 
 class SimulatorApp(tk.Tk):
@@ -31,6 +42,7 @@ class SimulatorApp(tk.Tk):
         self.state_lock = threading.Lock()
         self.state: RunState | None = None
         self.spectrum_preview_config: SimulationConfig | None = None
+        self.last_progress_redraw = 0.0
         self.entries: dict[str, tk.Variable] = {}
         self._build_ui()
         self.after(150, self._poll_queue)
@@ -50,14 +62,15 @@ class SimulatorApp(tk.Tk):
             ("energy_fwhm_ev", "FWHM (eV)", tk.DoubleVar(value=0.2)),
             ("n_detectors", "Detectors", tk.IntVar(value=100000)),
             ("activity_bq", "Activity/pixel (Bq)", tk.DoubleVar(value=30.0)),
-            ("tau_eff_us", "Tau eff (us)", tk.DoubleVar(value=0.001)),
-            ("live_time_years_target", "Target years", tk.DoubleVar(value=1000.0)),
-            ("chunk_days", "Chunk days", tk.DoubleVar(value=100.0)),
+            ("tau_eff_us", "Tau eff (us)", tk.DoubleVar(value=0.1)),
+            ("live_time_years_target", "Target years", tk.DoubleVar(value=1.0)),
+            ("chunk_years", "Chunk years", tk.DoubleVar(value=0.1)),
             ("n_grid", "Energy grid", tk.IntVar(value=32768)),
             ("n_bins", "Histogram bins", tk.IntVar(value=50)),
-            ("fit_low_offset_ev", "Fit low Q+ (eV)", tk.DoubleVar(value=-1.0)),
-            ("fit_high_offset_ev", "Fit high Q+ (eV)", tk.DoubleVar(value=0.0)),
+            ("fit_low_offset_ev", "Fit low Q+ (eV)", tk.DoubleVar(value=-10.0)),
+            ("fit_high_offset_ev", "Fit high Q+ (eV)", tk.DoubleVar(value=0.1)),
             ("endpoint_weight", "Endpoint weight", tk.DoubleVar(value=10.0)),
+            ("parallel_fit_runs", "Parallel fit runs", tk.IntVar(value=5)),
             ("rng_seed", "RNG seed", tk.IntVar(value=12345)),
         ]
         for row, (key, label, var) in enumerate(fields):
@@ -71,7 +84,7 @@ class SimulatorApp(tk.Tk):
         )
         method_row = len(fields) + 1
         ttk.Label(left, text="Fit method").grid(row=method_row, column=0, sticky="w", pady=2)
-        self.entries["fit_method"] = tk.StringVar(value="linearized")
+        self.entries["fit_method"] = tk.StringVar(value="robust_mle")
         ttk.Combobox(
             left,
             textvariable=self.entries["fit_method"],
@@ -118,8 +131,18 @@ class SimulatorApp(tk.Tk):
         self.gpu_state_label = tk.StringVar(value="unknown")
         ttk.Label(gpu_frame, textvariable=self.gpu_state_label).grid(row=0, column=2, sticky="w")
 
-        self.metrics = tk.StringVar(value="")
-        ttk.Label(left, textvariable=self.metrics, justify="left", wraplength=280).grid(
+        self.metrics_text = tk.Text(
+            left,
+            width=34,
+            height=14,
+            wrap="word",
+            relief="flat",
+            bg=self.cget("bg"),
+            highlightthickness=0,
+        )
+        self.metrics_text.tag_configure("warning", foreground="#b00020")
+        self.metrics_text.configure(state="disabled")
+        self.metrics_text.grid(
             row=len(fields) + 6, column=0, columnspan=2, sticky="ew", pady=6
         )
 
@@ -134,7 +157,9 @@ class SimulatorApp(tk.Tk):
         self.ax_fit = self.fig.add_subplot(413)
         self.ax_sens = self.fig.add_subplot(414)
         self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        canvas_widget = self.canvas.get_tk_widget()
+        canvas_widget.grid(row=0, column=0, sticky="nsew")
+        canvas_widget.unbind("<Motion>")
 
         self.new_run()
 
@@ -148,7 +173,7 @@ class SimulatorApp(tk.Tk):
             activity_bq=float(self.entries["activity_bq"].get()),
             tau_eff_us=float(self.entries["tau_eff_us"].get()),
             live_time_years_target=float(self.entries["live_time_years_target"].get()),
-            chunk_days=float(self.entries["chunk_days"].get()),
+            chunk_days=float(self.entries["chunk_years"].get()) * 365.25,
             n_grid=int(self.entries["n_grid"].get()),
             n_bins=int(self.entries["n_bins"].get()),
             fit_low_offset_ev=float(self.entries["fit_low_offset_ev"].get()),
@@ -156,6 +181,7 @@ class SimulatorApp(tk.Tk):
             fit_method=str(self.entries["fit_method"].get()),
             endpoint_weight=float(self.entries["endpoint_weight"].get()),
             fit_use_flat_offset=bool(self.entries["fit_use_flat_offset"].get()),
+            parallel_fit_runs=max(1, int(self.entries["parallel_fit_runs"].get())),
             rng_seed=int(self.entries["rng_seed"].get()),
             use_gpu=bool(self.entries["use_gpu"].get()),
         )
@@ -165,6 +191,9 @@ class SimulatorApp(tk.Tk):
             if key == "mnu_mev":
                 var.set(config.true_mnu_mev)
                 continue
+            if key == "chunk_years":
+                var.set(config.chunk_days / 365.25)
+                continue
             if hasattr(config, key):
                 var.set(getattr(config, key))
 
@@ -173,9 +202,8 @@ class SimulatorApp(tk.Tk):
             config = self.config_from_ui()
             self.state = new_state(config)
             self.spectrum_preview_config = None
-            result = fisher_mnu_sensitivity(config, max(config.chunk_days / 365.25, 1e-6))
             self.status.set(f"New run ready. Backend: {backend_label(config.use_gpu)}")
-            self._update_metrics(result["mnu90_ev"])
+            self._update_metrics()
             self._redraw(refresh_spectrum=True)
         except Exception as exc:
             messagebox.showerror("New run failed", str(exc))
@@ -190,9 +218,8 @@ class SimulatorApp(tk.Tk):
             if not running and empty_run:
                 self.state = new_state(config)
                 self.spectrum_preview_config = None
-                result = fisher_mnu_sensitivity(config, max(config.chunk_days / 365.25, 1e-6))
                 self.status.set("Spectra updated. These parameters will be used when the run starts.")
-                self._update_metrics(result["mnu90_ev"])
+                self._update_metrics()
             else:
                 self.spectrum_preview_config = config
                 self.status.set(
@@ -246,15 +273,28 @@ class SimulatorApp(tk.Tk):
 
     def _run_worker(self) -> None:
         assert self.state is not None
-        rng = rng_from_state(self.state)
+        with self.state_lock:
+            rng = rng_from_state(self.state)
         try:
             while not self.stop_event.is_set():
                 with self.state_lock:
                     if self.state.live_time_years >= self.state.config.live_time_years_target:
                         break
-                    entry = simulate_chunk(self.state, rng)
-                    save_state(self.state)
+                    state = self.state
+                    config = state.config
+                    live_time_years = float(state.live_time_years)
+                    counts = state.counts.copy()
+                counts, live_time_years, entry, rng_state = compute_chunk_update(
+                    config, live_time_years, counts, rng
+                )
+                with self.state_lock:
+                    state.counts = counts
+                    state.live_time_years = live_time_years
+                    state.sensitivity_history.append(entry)
+                    state.rng_state = rng_state
+                    save_state(state)
                 self.queue.put(("progress", entry))
+                time.sleep(0.05)
             self.queue.put(("stopped", None))
         except Exception as exc:
             self.queue.put(("error", str(exc)))
@@ -274,10 +314,19 @@ class SimulatorApp(tk.Tk):
                     error = payload
         except queue.Empty:
             pass
+        redrew_progress = False
         if latest_progress is not None:
-            self._update_metrics(latest_progress["mnu90_ev"])
-            self._redraw()
+            now = time.monotonic()
+            if stopped or now - self.last_progress_redraw >= 0.75:
+                self._update_metrics()
+                self._redraw()
+                self.last_progress_redraw = now
+                redrew_progress = True
         if stopped:
+            if latest_progress is not None and not redrew_progress:
+                self._update_metrics()
+                self._redraw()
+                self.last_progress_redraw = time.monotonic()
             self.status.set("Stopped. Progress has been saved.")
         if error is not None:
             self.status.set("Error.")
@@ -295,14 +344,11 @@ class SimulatorApp(tk.Tk):
                 [dict(row) for row in self.state.sensitivity_history],
             )
 
-    def _update_metrics(self, mnu90: float | None = None) -> None:
+    def _update_metrics(self) -> None:
         if self.state is None:
             return
         cfg, live_time_years, counts, _, sensitivity_history = self._state_snapshot()
         self._update_gpu_indicator(cfg)
-        if mnu90 is None and sensitivity_history:
-            mnu90 = sensitivity_history[-1]["mnu90_ev"]
-        mnu = "pending" if mnu90 is None else f"{1000.0 * mnu90:.1f} meV"
         estimate = None
         if sensitivity_history:
             estimate = sensitivity_history[-1]
@@ -314,99 +360,185 @@ class SimulatorApp(tk.Tk):
                 fit_method=cfg.fit_method,
                 endpoint_weight=cfg.endpoint_weight,
             )
-        best = "pending"
-        best_mnu2 = "pending"
-        if estimate and np.isfinite(estimate.get("mnu_hat_mev", np.nan)):
-            err = estimate.get("sigma_mnu_hat_mev", np.nan)
-            best = f"{estimate['mnu_hat_mev']:.1f} meV"
-            if np.isfinite(err):
-                best += f" +/- {err:.1f} meV"
+        best_mnu = "pending"
         if estimate and np.isfinite(estimate.get("mnu2_hat_ev2", np.nan)):
-            best_mnu2 = f"{estimate['mnu2_hat_ev2']:+.4g} eV^2"
-            sig2 = estimate.get("sigma_mnu2_ev2", np.nan)
-            if np.isfinite(sig2):
-                best_mnu2 += f" +/- {sig2:.3g}"
-        power_txt = "pending"
+            fit_mnu = self._physical_mnu_mev(float(estimate["mnu2_hat_ev2"]))
+            best_mnu = f"{fit_mnu:+.1f} meV"
+        precision_target = 0.5 * cfg.true_mnu_mev
+        error_txt = "pending"
+        ensemble_mnu_txt = "pending"
+        expected_error_txt = "pending"
         crossing_txt = "pending"
-        if len(sensitivity_history) >= 3:
-            fit = self._fit_power_law_crossing(
-                np.array([row["live_time_years"] for row in sensitivity_history], dtype=float),
-                np.array([1000.0 * row["mnu90_ev"] for row in sensitivity_history], dtype=float),
-                cfg.true_mnu_mev,
+        if estimate and cfg.true_mnu_mev > 0.0:
+            sigma_mnu2 = estimate.get("sigma_mnu2_ev2", np.nan)
+            if np.isfinite(sigma_mnu2):
+                expected_error_mev = self._expected_physical_mass_rms_mev(
+                    cfg.mnu2_ev2, float(sigma_mnu2)
+                )
+                expected_error_txt = f"{expected_error_mev:.1f} meV"
+                if live_time_years > 0.0 and precision_target > 0.0:
+                    exposure_years = self._solve_expected_mass_exposure(
+                        live_time_years,
+                        float(sigma_mnu2),
+                        cfg.mnu2_ev2,
+                        precision_target,
+                    )
+                    if np.isfinite(exposure_years):
+                        if exposure_years <= live_time_years:
+                            crossing_txt = f"{exposure_years:.3g} yr (already crossed)"
+                        else:
+                            crossing_txt = f"{exposure_years:.3g} yr"
+        ensemble_rows = [
+            row
+            for row in sensitivity_history
+            if np.isfinite(
+                row.get(
+                    "fit_ensemble_rms_error_mev",
+                    row.get(
+                        "fit_ensemble_physical_rms_error_mev",
+                        row.get("fit_ensemble_signed_rms_error_mev", np.nan),
+                    ),
+                )
             )
-            if fit is not None:
-                power_txt = f"m90 = {fit['a_mev']:.3g} * t^{fit['b']:.3g}"
-                crossing_txt = fit["crossing_text"]
-        self.metrics.set(
-            "\n".join(
-                [
-                    f"Live time: {live_time_years:.4g} yr",
-                    f"Counts: {counts.sum():.4g}",
-                    f"True m_nu: {cfg.true_mnu_mev:.1f} meV",
-                    f"Fit m_nu^2: {best_mnu2}",
-                    f"Physical m_nu: {best}",
-                    f"f_pp: {cfg.pileup_fraction:.3g}",
-                    f"Rate: {cfg.total_rate_hz:.3g} /s",
-                    f"90% sensitivity: {mnu}",
-                    f"Power law fit: {power_txt}",
-                    f"Crossing @ true m_nu: {crossing_txt}",
-                    f"Backend: {backend_label(cfg.use_gpu)}",
-                ]
+        ]
+        if ensemble_rows:
+            latest_rms = ensemble_rows[-1].get(
+                "fit_ensemble_rms_error_mev",
+                ensemble_rows[-1].get(
+                    "fit_ensemble_physical_rms_error_mev",
+                    ensemble_rows[-1].get("fit_ensemble_signed_rms_error_mev", np.nan),
+                ),
             )
-        )
+            error_txt = f"{latest_rms:.1f} meV"
+            ensemble_mnu = ensemble_rows[-1].get("fit_ensemble_mean_mev", np.nan)
+            if np.isfinite(ensemble_mnu):
+                ensemble_mnu_txt = f"{ensemble_mnu:+.1f} meV"
+        fit_width_ev = max(0.0, cfg.fit_high_offset_ev - cfg.fit_low_offset_ev)
+        bin_width_ev = fit_width_ev / max(1, int(cfg.n_bins))
+        grid_span_ev = 2.0 * cfg.q_ec_ev + 50.0
+        grid_step_ev = grid_span_ev / max(1, int(cfg.n_grid) - 1)
+        under_resolved = bin_width_ev < grid_step_ev
+        resolution_txt = f"bin {bin_width_ev:.3g} eV, grid {grid_step_ev:.3g} eV"
+        if under_resolved:
+            resolution_txt += " (under-resolved)"
+        lines = [
+            f"Live time: {live_time_years:.4g} yr",
+            f"Chunk length: {cfg.chunk_days / 365.25:.4g} yr",
+            f"Counts: {counts.sum():.4g}",
+            f"True m_nu: {cfg.true_mnu_mev:.1f} meV",
+            f"Fit m_nu: {best_mnu}",
+            f"Tau eff: {cfg.tau_eff_us:.4g} us",
+            f"f_pp: {cfg.pileup_fraction:.3g}",
+            f"Rate: {cfg.total_rate_hz:.3g} /s",
+            f"Parallel fit runs: {cfg.parallel_fit_runs}",
+            f"Parallel mean m_nu: {ensemble_mnu_txt}",
+            f"Current RMS error: {error_txt}",
+            f"50% target error: {precision_target:.1f} meV",
+            f"Expected RMS: {expected_error_txt}",
+            f"Exposure for +/- 50%: {crossing_txt}",
+            f"Fit resolution: {resolution_txt}",
+            f"Backend: {backend_label(cfg.use_gpu)}",
+        ]
+        self.metrics_text.configure(state="normal")
+        self.metrics_text.delete("1.0", "end")
+        for line in lines:
+            tags = ("warning",) if under_resolved and line.startswith("Fit resolution:") else ()
+            self.metrics_text.insert("end", line + "\n", tags)
+        self.metrics_text.configure(state="disabled")
 
-    def _fit_power_law_crossing(
-        self, years: np.ndarray, m90_mev: np.ndarray, target_mev: float
+    def _physical_mnu_mev(self, mnu2_ev2: float) -> float:
+        return float(np.sqrt(max(mnu2_ev2, 0.0)) * 1000.0)
+
+    def _expected_physical_mass_rms_mev(
+        self, true_mnu2_ev2: float, sigma_mnu2_ev2: float
+    ) -> float:
+        if sigma_mnu2_ev2 < 0.0 or not np.isfinite(sigma_mnu2_ev2):
+            return float("nan")
+        true_mev = np.sqrt(max(true_mnu2_ev2, 0.0)) * 1000.0
+        if sigma_mnu2_ev2 == 0.0:
+            return 0.0
+        nodes, weights = np.polynomial.hermite.hermgauss(80)
+        mnu2_samples = true_mnu2_ev2 + np.sqrt(2.0) * sigma_mnu2_ev2 * nodes
+        physical_mev = np.sqrt(np.maximum(mnu2_samples, 0.0)) * 1000.0
+        mean_sq = np.sum(weights * (physical_mev - true_mev) ** 2) / np.sqrt(np.pi)
+        return float(np.sqrt(max(mean_sq, 0.0)))
+
+    def _solve_expected_mass_exposure(
+        self,
+        live_time_years: float,
+        sigma_mnu2_ev2: float,
+        true_mnu2_ev2: float,
+        target_mev: float,
+    ) -> float:
+        if (
+            live_time_years <= 0.0
+            or sigma_mnu2_ev2 <= 0.0
+            or target_mev <= 0.0
+            or not np.isfinite(sigma_mnu2_ev2)
+        ):
+            return float("nan")
+
+        def error_at(years: float) -> float:
+            scaled_sigma = sigma_mnu2_ev2 * np.sqrt(live_time_years / years)
+            return self._expected_physical_mass_rms_mev(true_mnu2_ev2, scaled_sigma)
+
+        current_error = error_at(live_time_years)
+        if not np.isfinite(current_error):
+            return float("nan")
+        if current_error <= target_mev:
+            low = max(live_time_years * 1e-12, 1e-12)
+            high = live_time_years
+            if error_at(low) <= target_mev:
+                return high
+        else:
+            low = live_time_years
+            high = live_time_years
+            for _ in range(80):
+                high *= 2.0
+                if not np.isfinite(high):
+                    return float("nan")
+                if error_at(high) <= target_mev:
+                    break
+            else:
+                return float("nan")
+
+        for _ in range(80):
+            mid = 0.5 * (low + high)
+            if error_at(mid) <= target_mev:
+                high = mid
+            else:
+                low = mid
+        return float(high)
+
+    def _fit_sqrt_time_crossing(
+        self, years: np.ndarray, values_mev: np.ndarray, target_mev: float
     ) -> dict | None:
-        mask = np.isfinite(years) & np.isfinite(m90_mev) & (years > 0.0) & (m90_mev > 0.0)
+        mask = np.isfinite(years) & np.isfinite(values_mev) & (years > 0.0) & (values_mev > 0.0)
         x = years[mask]
-        y = m90_mev[mask]
-        if x.size < 3:
+        y = values_mev[mask]
+        if x.size < 1:
             return None
-        lx = np.log(x + 1e-300)
-        ly = np.log(y + 1e-300)
-        b0, ln_a0 = np.polyfit(lx, ly, 1)
-        a0 = float(np.exp(ln_a0))
+        order = np.argsort(x)
+        x = x[order]
+        y = y[order]
 
-        def power_law(t, a, b):
-            return a * np.power(t, b)
-
-        try:
-            (a_fit, b_fit), _ = curve_fit(
-                power_law,
-                x,
-                y,
-                p0=(max(a0, 1e-12), b0),
-                bounds=([1e-12, -5.0], [1e6, 2.0]),
-                maxfev=20000,
-            )
-            a = float(a_fit)
-            b = float(b_fit)
-        except Exception:
-            a = a0
-            b = float(b0)
-
-        out = {"a_mev": a, "b": float(b), "crossing_years": np.nan, "crossing_text": "no crossing"}
+        latest_years = float(x[-1])
+        latest_value_mev = float(y[-1])
+        a = float(latest_value_mev * np.sqrt(latest_years))
+        out = {
+            "a_mev_sqrt_yr": a,
+            "crossing_years": np.nan,
+            "crossing_text": "no crossing",
+            "fit_years": np.array([latest_years], dtype=float),
+            "fit_values_mev": np.array([latest_value_mev], dtype=float),
+        }
         if target_mev <= 0.0 or not np.isfinite(target_mev):
             out["crossing_text"] = "invalid target mass"
             return out
-        if b >= 0.0:
-            out["crossing_text"] = "no crossing (slope >= 0)"
+        if a <= 0.0 or not np.isfinite(a):
+            out["crossing_text"] = "invalid error-bar fit"
             return out
-        # Compute crossing in log-space to avoid overflow when |1/b| is large.
-        if abs(b) < 1e-12:
-            out["crossing_text"] = "no crossing (|slope| too small)"
-            return out
-        log_ratio = np.log(target_mev) - np.log(max(a, 1e-300))
-        log_t_cross = log_ratio / b
-        max_log = np.log(np.finfo(float).max)
-        if not np.isfinite(log_t_cross) or log_t_cross > max_log:
-            out["crossing_text"] = "no physical crossing"
-            return out
-        if log_t_cross < -max_log:
-            out["crossing_text"] = "no physical crossing"
-            return out
-        t_cross = float(np.exp(log_t_cross))
+        t_cross = float((a / target_mev) ** 2)
         if not np.isfinite(t_cross) or t_cross <= 0.0:
             out["crossing_text"] = "no physical crossing"
             return out
@@ -443,10 +575,10 @@ class SimulatorApp(tk.Tk):
         pileup_density = gaussian_convolve_density(
             energy, model["pileup_density"], config.energy_fwhm_ev
         )
-        single = (1.0 - f_pp) * n_events * bin_density(
+        single = (1.0 - f_pp) * n_events * bin_density_interpolated(
             energy, single_density, bin_edges_ev
         )
-        passing_pileup = f_pp * n_events * bin_density(
+        passing_pileup = f_pp * n_events * bin_density_interpolated(
             energy, pileup_density, bin_edges_ev
         )
         return total, single, passing_pileup
@@ -572,13 +704,12 @@ class SimulatorApp(tk.Tk):
             zorder=10,
             label=pileup_label,
         )
-        self.ax_hist.set_yscale("log")
         plotted_counts = np.concatenate(
             [counts, expected_total, expected_single, expected_pileup]
         )
         finite_counts = plotted_counts[np.isfinite(plotted_counts)]
         upper_count = max(0.5, float(finite_counts.max())) if finite_counts.size else 0.5
-        self.ax_hist.set_ylim(0.5, max(1.0, 1.05 * upper_count))
+        self.ax_hist.set_ylim(0.0, max(1.0, 1.05 * upper_count))
         self.ax_hist.set_ylabel("Counts/bin")
         self.ax_hist.set_xlabel("Measured energy (eV)")
         self.ax_hist.legend(loc="upper right")
@@ -602,6 +733,9 @@ class SimulatorApp(tk.Tk):
             endpoint_weight=cfg.endpoint_weight,
         )
         fit_mnu2 = fit_estimate.get("mnu2_hat_ev2", np.nan)
+        fit_mnu_label = "nan"
+        if np.isfinite(fit_mnu2):
+            fit_mnu_label = f"{self._physical_mnu_mev(float(fit_mnu2)):+.3g} meV"
         fit_curve = np.asarray(fit_estimate.get("mu_fit", np.array([])), dtype=float)
         if fit_curve.size == counts.size and np.any(np.isfinite(fit_curve)):
             self.ax_fit.plot(
@@ -611,7 +745,7 @@ class SimulatorApp(tk.Tk):
                 lw=1.0,
                 marker="o",
                 ms=2.5,
-                label=f"Best fit bins (full model, m_nu^2={fit_mnu2:+.3g} eV^2)",
+                label=f"Best fit bins (full model, m_nu={fit_mnu_label})",
             )
             fit_params = fit_estimate.get("fit_params", {})
             if (
@@ -655,38 +789,77 @@ class SimulatorApp(tk.Tk):
                 ls=":",
                 label="Reference curve (no fit yet)",
             )
-        self.ax_fit.set_yscale("log")
         fit_positive = np.concatenate([counts, fit_curve])
         fit_positive = fit_positive[np.isfinite(fit_positive) & (fit_positive > 0.0)]
         if fit_positive.size:
-            self.ax_fit.set_ylim(0.5, max(1.0, 1.05 * float(fit_positive.max())))
+            self.ax_fit.set_ylim(0.0, max(1.0, 1.05 * float(fit_positive.max())))
         self.ax_fit.set_ylabel("Counts/bin")
         self.ax_fit.set_xlabel("Measured energy (eV)")
         self.ax_fit.legend(loc="upper right")
         self.ax_fit.grid(True, alpha=0.2)
 
         if sensitivity_history:
-            years = np.array([row["live_time_years"] for row in sensitivity_history], dtype=float)
-            meV = np.array([1000.0 * row["mnu90_ev"] for row in sensitivity_history], dtype=float)
-            self.ax_sens.plot(years, meV, marker="o", ms=3, color="#5a4a8f", label="90% sensitivity")
-            if years.size >= 3:
-                fit = self._fit_power_law_crossing(years, meV, cfg.true_mnu_mev)
-                if fit is not None:
-                    t_fit = np.geomspace(max(np.min(years[years > 0.0]), 1e-8), np.max(years), 200)
-                    y_fit = fit["a_mev"] * np.power(t_fit, fit["b"])
-                    self.ax_sens.plot(t_fit, y_fit, color="#1f9f6e", lw=1.4, label="Power-law fit")
-            fit_years = [row["live_time_years"] for row in sensitivity_history if np.isfinite(row.get("mnu2_hat_ev2", np.nan))]
-            fit_mev = [
-                np.sign(row["mnu2_hat_ev2"]) * np.sqrt(abs(row["mnu2_hat_ev2"])) * 1000.0
+            ensemble_rows = [
+                row
                 for row in sensitivity_history
-                if np.isfinite(row.get("mnu2_hat_ev2", np.nan))
+                if np.isfinite(row.get("fit_ensemble_mean_mev", np.nan))
+                and np.isfinite(row.get("fit_ensemble_std_mev", np.nan))
+                and np.isfinite(
+                    row.get(
+                        "fit_ensemble_rms_error_mev",
+                        row.get(
+                            "fit_ensemble_physical_rms_error_mev",
+                            row.get("fit_ensemble_signed_rms_error_mev", np.nan),
+                        ),
+                    )
+                )
             ]
-            if fit_years:
-                self.ax_sens.plot(fit_years, fit_mev, marker="s", ms=3, color="#a33f2a", label="Signed fit sqrt(|m_nu^2|)")
+            if ensemble_rows:
+                fit_years = np.array([row["live_time_years"] for row in ensemble_rows], dtype=float)
+                fit_mean = np.array([row["fit_ensemble_mean_mev"] for row in ensemble_rows], dtype=float)
+                fit_std = np.array([row["fit_ensemble_std_mev"] for row in ensemble_rows], dtype=float)
+                fit_rms_error = np.array(
+                    [
+                        row.get(
+                            "fit_ensemble_rms_error_mev",
+                            row.get(
+                                "fit_ensemble_physical_rms_error_mev",
+                                row.get("fit_ensemble_signed_rms_error_mev", np.nan),
+                            ),
+                        )
+                        for row in ensemble_rows
+                    ],
+                    dtype=float,
+                )
+                fit_runs = int(ensemble_rows[-1].get("fit_ensemble_runs", cfg.parallel_fit_runs))
+                self.ax_sens.plot(
+                    fit_years,
+                    fit_mean,
+                    marker="s",
+                    ms=3,
+                    color="#a33f2a",
+                    label=f"Parallel mean m_nu ({fit_runs} runs)",
+                )
+                self.ax_sens.fill_between(
+                    fit_years,
+                    fit_mean - fit_std,
+                    fit_mean + fit_std,
+                    color="#a33f2a",
+                    alpha=0.2,
+                    label="+/- 1 std",
+                )
+                precision_target = 0.5 * cfg.true_mnu_mev
+                self.ax_sens.axhline(
+                    precision_target,
+                    color="#db8b2b",
+                    lw=1.0,
+                    ls="--",
+                    label="50% precision target",
+                )
                 self.ax_sens.axhline(cfg.true_mnu_mev, color="#555555", lw=1.0, ls=":", label="True m_nu")
                 self.ax_sens.axhline(0.0, color="#888888", lw=0.8)
             self.ax_sens.legend(loc="best")
-        self.ax_sens.set_ylabel("m_nu scale (meV)")
+        self.ax_sens.set_ylabel("Fit scale / RMS error (meV)")
         self.ax_sens.set_xlabel("Live time (yr)")
         self.ax_sens.grid(True, alpha=0.2)
         self.fig.tight_layout()
@@ -696,3 +869,7 @@ class SimulatorApp(tk.Tk):
 def main() -> None:
     app = SimulatorApp()
     app.mainloop()
+
+
+if __name__ == "__main__":
+    main()

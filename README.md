@@ -9,7 +9,7 @@ array. It implements the corrected Phase-1 plan from the Holmes notes:
 - unresolved pileup from self-convolution;
 - Poisson accumulation in resumable chunks;
 - live histogram updates;
-- Fisher-matrix neutrino-mass sensitivity estimates.
+- ensemble-fit uncertainty projections for reaching +/-50% mass precision.
 
 Run the GUI:
 

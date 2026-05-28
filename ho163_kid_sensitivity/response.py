@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy.interpolate import PchipInterpolator
 from scipy.signal import fftconvolve
 
 from .spectra import normalize_density
@@ -43,3 +44,27 @@ def bin_density(
     cumulative[1:] = np.cumsum(0.5 * (density[1:] + density[:-1]) * np.diff(energy_ev))
     edge_cdf = np.interp(bin_edges_ev, energy_ev, cumulative, left=0.0, right=cumulative[-1])
     return np.diff(edge_cdf)
+
+
+def bin_density_interpolated(
+    energy_ev: np.ndarray,
+    density: np.ndarray,
+    bin_edges_ev: np.ndarray,
+    samples_per_bin: int = 4,
+    min_points: int = 4097,
+) -> np.ndarray:
+    """Integrate a smooth local interpolation of a density over bin edges.
+
+    This avoids making fine fit-window histograms depend on the coarse global
+    spectrum-grid spacing. It interpolates only inside the requested bin window;
+    it does not add physical information beyond the sampled model.
+    """
+    bin_edges_ev = np.asarray(bin_edges_ev, dtype=float)
+    if bin_edges_ev.size < 2:
+        return np.array([], dtype=float)
+    n_local = max(int(min_points), int(samples_per_bin) * (bin_edges_ev.size - 1) + 1)
+    local_energy = np.linspace(float(bin_edges_ev[0]), float(bin_edges_ev[-1]), n_local)
+    interpolator = PchipInterpolator(energy_ev, density, extrapolate=False)
+    local_density = np.asarray(interpolator(local_energy), dtype=float)
+    local_density = np.clip(np.nan_to_num(local_density, nan=0.0), 0.0, None)
+    return bin_density(local_energy, local_density, bin_edges_ev)

@@ -174,7 +174,7 @@ def estimate_mnu_from_counts(
             return best_val, best_x, mu_base
 
         span = 0.05
-        coarse = np.linspace(max(0.0, reference_mnu2_ev2 - span), reference_mnu2_ev2 + span, 31)
+        coarse = np.linspace(reference_mnu2_ev2 - span, reference_mnu2_ev2 + span, 31)
         best = (np.inf, float(reference_mnu2_ev2), nuisance_start.copy(), mu0.copy())
         current_start = nuisance_start.copy()
         for mnu2_c in coarse:
@@ -184,7 +184,7 @@ def estimate_mnu_from_counts(
                 best = (val, float(mnu2_c), x_hat.copy(), mu_base_c.copy())
 
         mnu2_center = best[1]
-        refine = np.linspace(max(0.0, mnu2_center - 0.01), mnu2_center + 0.01, 41)
+        refine = np.linspace(mnu2_center - 0.01, mnu2_center + 0.01, 41)
         current_start = best[2].copy()
         for mnu2_r in refine:
             val, x_hat, mu_base_r = fit_nuisance(float(mnu2_r), current_start)

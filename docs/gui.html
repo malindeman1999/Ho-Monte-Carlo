@@ -15,7 +15,8 @@
   <ul>
     <li><strong>New</strong> builds a fresh run from the current fields.</li>
     <li><strong>Update spectra</strong> redraws spectra from edited fields. During an accumulated run it is a preview and does not change saved run parameters.</li>
-    <li><strong>True m_nu</strong> sets the injected neutrino mass in meV. The default is 75 meV.</li>
+    <li><strong>True m_nu</strong> sets the injected neutrino mass in meV. The default is 100 meV.</li>
+    <li><strong>Parallel fit runs</strong> sets the number of independent pseudo-experiment fits used for the signed-fit mean and standard-deviation band. The default is 5.</li>
     <li><strong>Start</strong> accumulates chunks until paused or target years are reached.</li>
     <li><strong>Pause</strong> stops after the current chunk.</li>
     <li><strong>Save</strong> writes the current checkpoint.</li>
@@ -40,13 +41,15 @@
 
   <h2>Displayed Estimates</h2>
   <p>
-    The live <strong>Fit m_nu^2</strong> is a signed linearized Poisson fit to
-    the accumulated histogram with nuisance directions for normalization, flat
-    background, and pileup scale. Because statistical fluctuations can drive
-    <code>m_nu^2</code> negative, the GUI also shows <strong>Physical m_nu</strong>,
-    which is clipped to zero before taking the square root. The plot displays a
-    signed square-root scale for the fitted <code>m_nu^2</code> so negative
-    excursions remain visible instead of flattening at zero.
+    The live <strong>Fit m_nu^2</strong> remains the fit to the accumulated
+    histogram. At each saved exposure, the sensitivity plot additionally draws
+    independent pseudo-experiment histograms and fits them concurrently. It
+    displays the mean signed square-root fit and shades one standard deviation.
+    Separately, it computes the RMS error of the physical fitted mass relative
+    to the injected mass. It fits only the newer half of those RMS-error points
+    to <code>A / sqrt(t)</code>, then projects when that curve reaches half of
+    the true neutrino mass. This is the estimated exposure for a measurement
+    with approximately +/-50% physical mass accuracy.
   </p>
 
   <h2>Plots</h2>

@@ -54,13 +54,22 @@
     This is the right scale for exposures with 10^14 to 10^15 physical events.
   </p>
 
-  <h2>Fisher Estimate</h2>
+  <h2>Fit Uncertainty Projection</h2>
   <p>
-    The displayed sensitivity is a compact Fisher estimate. The floated
-    directions are <code>mnu2</code>, normalization, flat background, and
-    unresolved pileup scale. The Q-value is fixed in the GUI estimator because
-    a robust Q-floating fit is more expensive and should be added after this
-    first trade-study tool is validated.
+    The floated fit directions include <code>mnu2</code>, normalization, and
+    optionally flat background. The Q-value is fixed in the GUI estimator
+    because a robust Q-floating fit is more expensive and should be added after
+    this first trade-study tool is validated.
+  </p>
+  <p>
+    The sensitivity history also reports Monte Carlo fit variation. For each
+    exposure point it draws the configured number of independent cumulative
+    Poisson histograms, fits them concurrently, and stores the mean and
+    standard deviation of the signed fitted neutrino-mass scale. It also stores
+    the RMS error of the physical fitted mass relative to the injected mass.
+    The GUI fits the newer half of those RMS-error values to
+    <code>A / sqrt(t)</code> and reports where that curve reaches half of the
+    injected mass.
   </p>
 </main>
 </body>
